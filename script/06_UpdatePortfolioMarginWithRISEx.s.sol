@@ -3,7 +3,7 @@ pragma solidity ^0.8.19;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {PortfolioMarginManager} from "../src/PortfolioMarginManager.sol";
-import {MarketParams} from "morpho-blue/interfaces/IMorpho.sol";
+import {MarketParams} from "../src/interfaces/IMorpho.sol";
 
 /// @title Update Portfolio Margin with RISEx
 /// @notice Redeploy PortfolioMarginManager with correct RISEx address

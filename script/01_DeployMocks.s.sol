@@ -3,8 +3,6 @@ pragma solidity ^0.8.19;
 
 import {BaseDeployment} from "./BaseDeployment.s.sol";
 import {MockWETH} from "../src/mocks/MockWETH.sol";
-import {MockWBTC} from "../src/mocks/MockWBTC.sol";
-import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 import {MockOracle} from "../src/mocks/MockOracle.sol";
 import {MockIRM} from "../src/mocks/MockIRM.sol";
 import {console2} from "forge-std/console2.sol";
@@ -37,20 +35,11 @@ contract DeployMocks is BaseDeployment {
             console2.log("MockWETH already deployed at:", deployment.weth);
         }
         
-        if (deployment.wbtc == address(0)) {
-            deployment.wbtc = address(new MockWBTC());
-            console2.log("MockWBTC deployed at:", deployment.wbtc);
-        } else {
-            console2.log("MockWBTC already deployed at:", deployment.wbtc);
-        }
+        // Skip WBTC deployment for now - focus on WETH/USDC market only
         
-        // Deploy Mock USDC
-        if (deployment.usdc == address(0)) {
-            deployment.usdc = address(new MockUSDC());
-            console2.log("MockUSDC deployed at:", deployment.usdc);
-        } else {
-            console2.log("MockUSDC already deployed at:", deployment.usdc);
-        }
+        // Use existing RISE testnet USDC (not deploying MockUSDC)
+        deployment.usdc = 0x8d17fC7Db6b4FCf40AFB296354883DEC95a12f58;
+        console2.log("Using RISE testnet USDC at:", deployment.usdc);
         
         // Deploy Oracles
         // WETH/USDC price: $3000 per ETH
@@ -64,16 +53,7 @@ contract DeployMocks is BaseDeployment {
             console2.log("WETH Oracle already deployed at:", deployment.wethOracle);
         }
         
-        // WBTC/USDC price: $50000 per BTC  
-        // Price calculation: 50000 * 10^(36 + 6 - 8) = 50000 * 10^34
-        if (deployment.wbtcOracle == address(0)) {
-            uint256 wbtcPrice = 50000 * 10**34;
-            deployment.wbtcOracle = address(new MockOracle(wbtcPrice));
-            console2.log("WBTC Oracle deployed at:", deployment.wbtcOracle);
-            console2.log("  Initial price: $50000/BTC");
-        } else {
-            console2.log("WBTC Oracle already deployed at:", deployment.wbtcOracle);
-        }
+        // Skip WBTC oracle - focus on WETH/USDC market only
         
         // Deploy IRM with 5% APR
         if (deployment.irm == address(0)) {

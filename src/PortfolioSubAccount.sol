@@ -3,8 +3,8 @@ pragma solidity ^0.8.19;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IMorpho, MarketParams, Id, Position} from "morpho-blue/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "morpho-blue/libraries/MarketParamsLib.sol";
+import {IMorpho, MarketParams, Position} from "./interfaces/IMorpho.sol";
+import {MarketParamsLib} from "./libraries/morpho/MarketParamsLib.sol";
 import {IRISExPerpsManager} from "./interfaces/IRISExPerpsManager.sol";
 
 /// @title PortfolioSubAccount
@@ -51,16 +51,16 @@ contract PortfolioSubAccount {
     event Initialized(address indexed user);
     
     /// @notice Emitted when collateral is deposited to Morpho
-    event CollateralDeposited(Id indexed marketId, address indexed token, uint256 amount);
+    event CollateralDeposited(bytes32 indexed marketId, address indexed token, uint256 amount);
     
     /// @notice Emitted when collateral is withdrawn from Morpho
-    event CollateralWithdrawn(Id indexed marketId, address indexed token, uint256 amount);
+    event CollateralWithdrawn(bytes32 indexed marketId, address indexed token, uint256 amount);
     
     /// @notice Emitted when USDC is borrowed from Morpho
-    event USDCBorrowed(Id indexed marketId, uint256 amount);
+    event USDCBorrowed(bytes32 indexed marketId, uint256 amount);
     
     /// @notice Emitted when USDC debt is repaid to Morpho
-    event USDCRepaid(Id indexed marketId, uint256 amount);
+    event USDCRepaid(bytes32 indexed marketId, uint256 amount);
     
     /// @notice Constructor sets immutable addresses
     /// @param _manager Portfolio margin manager address

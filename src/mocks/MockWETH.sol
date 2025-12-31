@@ -13,7 +13,7 @@ contract MockWETH is ERC20, Ownable {
     /// @notice Mint tokens to an address
     /// @param to Address to mint to
     /// @param amount Amount to mint (18 decimals)
-    function mint(address to, uint256 amount) external onlyOwner {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
     

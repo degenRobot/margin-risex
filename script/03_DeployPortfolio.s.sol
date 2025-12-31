@@ -4,15 +4,15 @@ pragma solidity ^0.8.19;
 import {BaseDeployment} from "./BaseDeployment.s.sol";
 import {PortfolioMarginManager} from "../src/PortfolioMarginManager.sol";
 import {PortfolioSubAccount} from "../src/PortfolioSubAccount.sol";
-import {MarketParams, Id} from "morpho-blue/interfaces/IMorpho.sol";
+import {MarketParams} from "../src/interfaces/IMorpho.sol";
 import {console2} from "forge-std/console2.sol";
 
 /// @title DeployPortfolio
 /// @notice Deploy portfolio margin system contracts
 contract DeployPortfolio is BaseDeployment {
     
-    // RISEx PerpsManager address on RISE testnet (placeholder for now)
-    address constant RISEX_PERPS_MANAGER = address(0x0000000000000000000000000000000000000000);
+    // RISEx PerpsManager address on RISE testnet
+    address constant RISEX_PERPS_MANAGER = 0x68cAcD54a8c93A3186BF50bE6b78B761F728E1b4;
     
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -61,7 +61,7 @@ contract DeployPortfolio is BaseDeployment {
         console2.log("Adding market configurations...");
         
         // Check if market already added
-        try manager.marketConfigs(Id.wrap(deployment.wethMarketId)) returns (
+        try manager.marketConfigs(deployment.wethMarketId) returns (
             bool isSupported,
             uint256,
             MarketParams memory
@@ -86,7 +86,7 @@ contract DeployPortfolio is BaseDeployment {
             lltv: 0.77e18
         });
         
-        try manager.marketConfigs(Id.wrap(deployment.wbtcMarketId)) returns (
+        try manager.marketConfigs(deployment.wbtcMarketId) returns (
             bool isSupported,
             uint256,
             MarketParams memory

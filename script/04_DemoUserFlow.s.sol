@@ -5,9 +5,8 @@ import {BaseDeployment} from "./BaseDeployment.s.sol";
 import {PortfolioMarginManager} from "../src/PortfolioMarginManager.sol";
 import {PortfolioSubAccount} from "../src/PortfolioSubAccount.sol";
 import {MockWETH} from "../src/mocks/MockWETH.sol";
-import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IMorpho, MarketParams, Position, Id} from "morpho-blue/interfaces/IMorpho.sol";
+import {IMorpho, MarketParams, Position} from "../src/interfaces/IMorpho.sol";
 import {console2} from "forge-std/console2.sol";
 
 /// @title DemoUserFlow
@@ -29,7 +28,7 @@ contract DemoUserFlow is BaseDeployment {
         PortfolioMarginManager manager = PortfolioMarginManager(deployment.portfolioMarginManager);
         IMorpho morpho = IMorpho(deployment.morpho);
         MockWETH weth = MockWETH(payable(deployment.weth));
-        MockUSDC usdc = MockUSDC(payable(deployment.usdc));
+        IERC20 usdc = IERC20(deployment.usdc);
         
         // Market params
         MarketParams memory wethMarket = MarketParams({
@@ -105,7 +104,7 @@ contract DemoUserFlow is BaseDeployment {
         console2.log("Deposited 5 WETH as collateral");
         
         // Check Morpho position
-        Position memory position = morpho.position(Id.wrap(deployment.wethMarketId), subAccount);
+        Position memory position = morpho.position(deployment.wethMarketId, subAccount);
         console2.log("Morpho collateral:", position.collateral / 1e18, "WETH");
         
         // Step 4: Check health

@@ -4,9 +4,9 @@ pragma solidity ^0.8.19;
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IMorpho, MarketParams, Id, Market, Position} from "morpho-blue/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "morpho-blue/libraries/MarketParamsLib.sol";
-import {IOracle} from "morpho-blue/interfaces/IOracle.sol";
+import {IMorpho, MarketParams, Market, Position} from "./interfaces/IMorpho.sol";
+import {MarketParamsLib} from "./libraries/morpho/MarketParamsLib.sol";
+import {IOracle} from "./interfaces/IOracle.sol";
 import {IRISExPerpsManager} from "./interfaces/IRISExPerpsManager.sol";
 import {PortfolioSubAccount} from "./PortfolioSubAccount.sol";
 
@@ -32,10 +32,10 @@ contract PortfolioMarginManager is Ownable {
     mapping(address => address) public subAccountUsers;
     
     /// @notice Supported Morpho market configurations
-    mapping(Id => MarketConfig) public marketConfigs;
+    mapping(bytes32 => MarketConfig) public marketConfigs;
     
     /// @notice List of supported market IDs
-    Id[] public supportedMarkets;
+    bytes32[] public supportedMarkets;
     
     /// @notice Liquidation threshold (scaled by 1e18, e.g., 0.95e18 = 95%)
     uint256 public constant LIQUIDATION_THRESHOLD = 0.95e18;
@@ -66,12 +66,12 @@ contract PortfolioMarginManager is Ownable {
     event SubAccountCreated(address indexed user, address indexed subAccount);
     
     /// @notice Emitted when a market is added
-    event MarketAdded(Id indexed marketId, uint256 collateralFactor);
+    event MarketAdded(bytes32 indexed marketId, uint256 collateralFactor);
     
     /// @notice Emitted when a portfolio is liquidated
     event PortfolioLiquidated(address indexed user, address indexed liquidator, uint256 incentive);
     
-    constructor(address _morpho, address _risex) {
+    constructor(address _morpho, address _risex) Ownable() {
         MORPHO = IMorpho(_morpho);
         RISEX = IRISExPerpsManager(_risex);
         
@@ -143,7 +143,7 @@ contract PortfolioMarginManager is Ownable {
     ) external onlyOwner {
         require(collateralFactor <= 1e18, "Invalid collateral factor");
         
-        Id marketId = marketParams.id();
+        bytes32 marketId = marketParams.id();
         require(!marketConfigs[marketId].isSupported, "Already supported");
         
         marketConfigs[marketId] = MarketConfig({
@@ -174,7 +174,7 @@ contract PortfolioMarginManager is Ownable {
         
         // Calculate Morpho positions value
         for (uint256 i = 0; i < supportedMarkets.length; i++) {
-            Id marketId = supportedMarkets[i];
+            bytes32 marketId = supportedMarkets[i];
             MarketConfig memory config = marketConfigs[marketId];
             
             Position memory position = MORPHO.position(marketId, subAccount);
@@ -197,7 +197,13 @@ contract PortfolioMarginManager is Ownable {
         }
         
         // Get RISEx equity
-        status.risexEquity = RISEX.getAccountEquity(subAccount);
+        // Wrap in try-catch to handle uninitialized accounts
+        try RISEX.getAccountEquity(subAccount) returns (int256 equity) {
+            status.risexEquity = equity;
+        } catch {
+            // If account not initialized on RISEx, equity is 0
+            status.risexEquity = 0;
+        }
         
         // Calculate health factor
         // Health = (CollateralValue + RISExEquity - Debt) / Debt
@@ -262,7 +268,7 @@ contract PortfolioMarginManager is Ownable {
         uint256 usdcBalance = IERC20(usdcToken).balanceOf(subAccount);
         if (usdcBalance > 0) {
             for (uint256 i = 0; i < supportedMarkets.length; i++) {
-                Id marketId = supportedMarkets[i];
+                bytes32 marketId = supportedMarkets[i];
                 MarketConfig memory config = marketConfigs[marketId];
                 
                 Position memory position = MORPHO.position(marketId, subAccount);
@@ -277,7 +283,7 @@ contract PortfolioMarginManager is Ownable {
         
         // Step 3: Seize collateral with liquidation incentive
         for (uint256 i = 0; i < supportedMarkets.length; i++) {
-            Id marketId = supportedMarkets[i];
+            bytes32 marketId = supportedMarkets[i];
             MarketConfig memory config = marketConfigs[marketId];
             
             Position memory position = MORPHO.position(marketId, subAccount);
@@ -324,7 +330,7 @@ contract PortfolioMarginManager is Ownable {
     /// @param index Market index
     /// @return marketId Market ID
     /// @return config Market configuration
-    function getSupportedMarket(uint256 index) external view returns (Id marketId, MarketConfig memory config) {
+    function getSupportedMarket(uint256 index) external view returns (bytes32 marketId, MarketConfig memory config) {
         marketId = supportedMarkets[index];
         config = marketConfigs[marketId];
     }

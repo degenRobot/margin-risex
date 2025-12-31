@@ -36,6 +36,22 @@ interface IMorpho {
     /// @param marketParams Market configuration
     function createMarket(MarketParams memory marketParams) external;
     
+    /// @notice Supply assets to a market
+    /// @param marketParams The market to supply to
+    /// @param assets Amount of assets to supply
+    /// @param shares Amount of shares to mint (use 0)
+    /// @param onBehalf Address that will own the position
+    /// @param data Callback data (use empty bytes)
+    /// @return assetsSupplied Actual amount supplied
+    /// @return sharesSupplied Shares minted
+    function supply(
+        MarketParams memory marketParams,
+        uint256 assets,
+        uint256 shares,
+        address onBehalf,
+        bytes memory data
+    ) external returns (uint256 assetsSupplied, uint256 sharesSupplied);
+    
     /// @notice Supply collateral to a market
     /// @param marketParams The market to supply to
     /// @param assets Amount of collateral to supply
