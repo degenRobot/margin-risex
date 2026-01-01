@@ -6,7 +6,7 @@ RISE_TESTNET_RPC := https://testnet.riselabs.xyz
 # Use environment variable if set, otherwise use indexing RPC for forking
 FORK_URL := ${BACKEND_RPC_URL}
 ifeq ($(FORK_URL),)
-	FORK_URL := $(RISE_INDEXING_RPC)
+	FORK_URL := $(RISE_TESTNET_RPC)
 endif
 
 # Use regular RPC for deployments
@@ -27,6 +27,7 @@ inspect:; forge inspect ${contract} storageLayout
 deploy:; forge script script/03_DeployPortfolioMargin.s.sol --rpc-url ${DEPLOY_RPC} --broadcast --verify
 deploy-mocks:; forge script script/01_DeployMocks.s.sol --rpc-url ${DEPLOY_RPC} --broadcast --verify
 deploy-update-risex:; forge script script/06_UpdatePortfolioMarginWithRISEx.s.sol --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY}
+deploy-full:; forge script script/DeployFull.s.sol --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY}
 
 # demo scripts
 demo:; forge script script/05_SimpleDemoUserFlow.s.sol --rpc-url ${FORK_URL} -vvv
@@ -100,6 +101,7 @@ fmt-check:; forge fmt --check
 # quick commands
 quick-test:; forge test -vv --match-test test_FullUserFlow --fork-url ${FORK_URL}
 quick-demo:; forge script script/05_SimpleDemoUserFlow.s.sol --rpc-url ${FORK_URL} -vv
+test-full-flow:; forge test -vv --match-contract FullFlow --fork-url ${FORK_URL}
 
 # help
 help:

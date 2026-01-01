@@ -28,3 +28,7 @@ deployments/*.json
 .DS_Store
 
 NOTES/*
+
+*/archive/*
+
+*.disabled

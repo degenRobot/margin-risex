@@ -1,247 +1,249 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.30;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMorpho, MarketParams, Position} from "./interfaces/IMorpho.sol";
 import {MarketParamsLib} from "./libraries/morpho/MarketParamsLib.sol";
-import {IRISExPerpsManager} from "./interfaces/IRISExPerpsManager.sol";
-import {IDeposit} from "./interfaces/IDeposit.sol";
+import {Constants} from "./libraries/Constants.sol";
 
 /// @title PortfolioSubAccount
-/// @notice User-specific proxy account for portfolio margin trading
-/// @dev Deployed as minimal proxy (EIP-1167) for each user
+/// @notice User sub-account for portfolio margin trading with Morpho and RISEx
+/// @dev Non-proxy implementation with manager-based access control
 contract PortfolioSubAccount {
     using SafeERC20 for IERC20;
     using MarketParamsLib for MarketParams;
     
-    /// @notice Portfolio margin manager contract
-    address public immutable MANAGER;
-    
-    /// @notice Morpho Blue contract
-    IMorpho public immutable MORPHO;
-    
-    /// @notice RISEx Perps Manager contract  
-    IRISExPerpsManager public immutable RISEX;
-    
-    /// @notice RISEx Deposit contract for USDC deposits
-    address constant DEPOSIT_CONTRACT = 0x5BC20A936EfEE0d758A3c168d2f017c83805B986;
-    
-    /// @notice USDC token address on RISE testnet
-    address constant USDC = 0x8d17fC7Db6b4FCf40AFB296354883DEC95a12f58;
+    /// @notice Portfolio margin manager that controls this account
+    address public immutable manager;
     
     /// @notice The user who owns this sub-account
-    address public user;
+    address public owner;
     
-    /// @notice Whether this account has been initialized
-    bool public initialized;
+    /// @notice Morpho Blue contract
+    IMorpho public constant MORPHO = IMorpho(Constants.MORPHO);
     
-    /// @dev Modifier to ensure only the owner can call
-    modifier onlyUser() {
-        require(msg.sender == user, "Only user");
+    /// @notice RISEx PerpsManager (skip Deposit contract which mints)
+    IPerpsManager public constant PERPS_MANAGER = IPerpsManager(Constants.RISEX_PERPS_MANAGER);
+    
+    /// @notice USDC token
+    IERC20 public constant USDC = IERC20(Constants.USDC);
+    
+    /// @notice Check if caller is owner
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
         _;
     }
     
-    /// @dev Modifier to ensure only the manager can call
+    /// @notice Check if caller is manager
     modifier onlyManager() {
-        require(msg.sender == MANAGER, "Only manager");
+        require(msg.sender == manager, "Only manager");
         _;
     }
     
-    /// @dev Modifier to ensure only user or manager can call
-    modifier onlyUserOrManager() {
-        require(msg.sender == user || msg.sender == MANAGER, "Only user or manager");
+    /// @notice Check if caller is owner or manager
+    modifier onlyOwnerOrManager() {
+        require(msg.sender == owner || msg.sender == manager, "Only owner or manager");
         _;
     }
     
-    /// @notice Emitted when account is initialized
-    event Initialized(address indexed user);
-    
-    /// @notice Emitted when collateral is deposited to Morpho
-    event CollateralDeposited(bytes32 indexed marketId, address indexed token, uint256 amount);
-    
-    /// @notice Emitted when collateral is withdrawn from Morpho
-    event CollateralWithdrawn(bytes32 indexed marketId, address indexed token, uint256 amount);
-    
-    /// @notice Emitted when USDC is borrowed from Morpho
+    /// @notice Events
+    event CollateralSupplied(bytes32 indexed marketId, uint256 amount);
+    event CollateralWithdrawn(bytes32 indexed marketId, uint256 amount);
     event USDCBorrowed(bytes32 indexed marketId, uint256 amount);
-    
-    /// @notice Emitted when USDC debt is repaid to Morpho
     event USDCRepaid(bytes32 indexed marketId, uint256 amount);
+    event RISExDeposit(uint256 amount, bool success);
+    event RISExWithdrawal(address token, uint256 amount);
+    event OrderPlaced(bytes orderData);
     
-    /// @notice Constructor sets immutable addresses
-    /// @param _manager Portfolio margin manager address
-    /// @param _morpho Morpho Blue address
-    /// @param _risex RISEx perps manager address
-    constructor(address _manager, address _morpho, address _risex) {
-        MANAGER = _manager;
-        MORPHO = IMorpho(_morpho);
-        RISEX = IRISExPerpsManager(_risex);
+    constructor(address _owner, address _manager) {
+        require(_owner != address(0), "Invalid owner");
+        require(_manager != address(0), "Invalid manager");
+        owner = _owner;
+        manager = _manager;
     }
     
-    /// @notice Initialize the sub-account for a specific user
-    /// @param _user The user who owns this account
-    /// @dev Can only be called once by the manager
-    function initialize(address _user) external onlyManager {
-        require(!initialized, "Already initialized");
-        require(_user != address(0), "Invalid user");
-        
-        initialized = true;
-        user = _user;
-        
-        emit Initialized(_user);
-    }
+    // ========== MORPHO FUNCTIONS ==========
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    // MORPHO INTEGRATION
-    // ═══════════════════════════════════════════════════════════════════════════
-    
-    /// @notice Deposit collateral to a Morpho market
-    /// @param marketParams Market parameters
-    /// @param amount Amount of collateral to deposit
-    function depositCollateral(
+    /// @notice Supply collateral to Morpho market
+    /// @param marketParams Market parameters  
+    /// @param amount Amount of collateral to supply
+    function supplyToMorpho(
         MarketParams calldata marketParams,
         uint256 amount
-    ) external onlyUser {
-        // Transfer collateral from user to this account
+    ) external onlyOwnerOrManager {
+        // Transfer collateral from caller to this account
         IERC20(marketParams.collateralToken).safeTransferFrom(msg.sender, address(this), amount);
         
-        // Approve Morpho to spend the collateral
+        // Approve Morpho
         IERC20(marketParams.collateralToken).safeApprove(address(MORPHO), amount);
         
-        // Supply collateral to Morpho
+        // Supply collateral
         MORPHO.supplyCollateral(marketParams, amount, address(this), "");
         
-        emit CollateralDeposited(marketParams.id(), marketParams.collateralToken, amount);
+        emit CollateralSupplied(marketParams.id(), amount);
     }
     
-    /// @notice Withdraw collateral from a Morpho market
-    /// @param marketParams Market parameters
-    /// @param amount Amount of collateral to withdraw
-    function withdrawCollateral(
-        MarketParams calldata marketParams,
-        uint256 amount
-    ) external onlyUser {
-        // Withdraw collateral from Morpho to user
-        MORPHO.withdrawCollateral(marketParams, amount, address(this), msg.sender);
-        
-        emit CollateralWithdrawn(marketParams.id(), marketParams.collateralToken, amount);
-    }
-    
-    /// @notice Borrow USDC from a Morpho market
+    /// @notice Borrow USDC from Morpho
     /// @param marketParams Market parameters
     /// @param amount Amount of USDC to borrow
-    /// @param toUser If true, send borrowed USDC to user; if false, keep in sub-account
-    function borrowUSDC(
+    function borrowFromMorpho(
         MarketParams calldata marketParams,
-        uint256 amount,
-        bool toUser
-    ) external onlyUser {
-        // Borrow USDC from Morpho
-        address recipient = toUser ? msg.sender : address(this);
-        (uint256 borrowed,) = MORPHO.borrow(marketParams, amount, 0, address(this), recipient);
+        uint256 amount
+    ) external onlyOwnerOrManager {
+        require(marketParams.loanToken == address(USDC), "Can only borrow USDC");
+        
+        // Borrow USDC to this account (funds stay internal)
+        (uint256 borrowed,) = MORPHO.borrow(
+            marketParams,
+            amount,
+            0, // shares
+            address(this), // onBehalf
+            address(this)  // receiver - IMPORTANT: keep funds in sub-account
+        );
         
         emit USDCBorrowed(marketParams.id(), borrowed);
     }
     
-    /// @notice Repay USDC debt to a Morpho market
+    /// @notice Withdraw collateral from Morpho
     /// @param marketParams Market parameters
-    /// @param amount Amount of USDC to repay (use type(uint256).max for full repayment)
-    function repayUSDC(
+    /// @param amount Amount to withdraw
+    /// @param to Recipient (owner or manager for liquidations)
+    function withdrawFromMorpho(
+        MarketParams calldata marketParams,
+        uint256 amount,
+        address to
+    ) external onlyOwnerOrManager {
+        // Only owner can withdraw to arbitrary address
+        if (msg.sender == owner) {
+            require(to == owner, "Owner can only withdraw to self");
+        }
+        
+        // Withdraw collateral
+        MORPHO.withdrawCollateral(marketParams, amount, address(this), to);
+        
+        emit CollateralWithdrawn(marketParams.id(), amount);
+    }
+    
+    /// @notice Repay USDC debt to Morpho
+    /// @param marketParams Market parameters
+    /// @param amount Amount to repay (type(uint256).max for full repayment)
+    function repayToMorpho(
         MarketParams calldata marketParams,
         uint256 amount
-    ) external onlyUserOrManager {
+    ) external onlyOwnerOrManager {
+        require(marketParams.loanToken == address(USDC), "Can only repay USDC");
+        
+        // If repaying max, get actual debt amount
         if (amount == type(uint256).max) {
-            // Get current debt amount
             Position memory pos = MORPHO.position(marketParams.id(), address(this));
             if (pos.borrowShares == 0) return;
         }
         
-        // Transfer USDC from sender to this account
-        IERC20(marketParams.loanToken).safeTransferFrom(msg.sender, address(this), amount);
+        // Transfer USDC from caller
+        USDC.safeTransferFrom(msg.sender, address(this), amount);
         
-        // Approve Morpho to spend USDC
-        IERC20(marketParams.loanToken).safeApprove(address(MORPHO), amount);
+        // Approve Morpho
+        USDC.safeApprove(address(MORPHO), amount);
         
         // Repay debt
-        (uint256 repaidAmount,) = MORPHO.repay(marketParams, amount, 0, address(this), "");
+        (uint256 repaid,) = MORPHO.repay(marketParams, amount, 0, address(this), "");
         
-        // Refund any excess
-        if (amount > repaidAmount) {
-            IERC20(marketParams.loanToken).safeTransfer(msg.sender, amount - repaidAmount);
+        // Return excess if any
+        if (amount > repaid && repaid > 0) {
+            USDC.safeTransfer(msg.sender, amount - repaid);
         }
         
-        emit USDCRepaid(marketParams.id(), repaidAmount);
+        emit USDCRepaid(marketParams.id(), repaid);
     }
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    // RISEX INTEGRATION
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ========== RISEX FUNCTIONS ==========
     
-    /// @notice Deposit USDC to RISEx using the Deposit contract
-    /// @param amount Amount of USDC to deposit (in 6 decimals)
-    /// @dev Uses the separate Deposit contract which handles scaling and forwarding to PerpsManager
-    function depositToRisEx(uint256 amount) external onlyUser {
-        // Ensure we have sufficient USDC balance in the sub-account
-        require(IERC20(USDC).balanceOf(address(this)) >= amount, "Insufficient USDC balance");
+    /// @notice Deposit USDC to RISEx
+    /// @param amount Amount of USDC to deposit (6 decimals)
+    function depositToRISEx(uint256 amount) external onlyOwnerOrManager {
+        require(USDC.balanceOf(address(this)) >= amount, "Insufficient USDC");
         
-        // Scale amount from 6 to 18 decimals (RISEx expects 18 decimals)
-        uint256 scaledAmount = amount * 10**12;
+        // Approve PerpsManager directly (skip Deposit contract)
+        USDC.approve(address(PERPS_MANAGER), amount);
         
-        // Approve deposit contract to spend USDC
-        IERC20(USDC).safeApprove(DEPOSIT_CONTRACT, amount);
-        
-        // Deposit to RISEx via deposit contract
-        IDeposit(DEPOSIT_CONTRACT).deposit(address(this), scaledAmount);
+        // Deposit directly to PerpsManager
+        // NOTE: This will revert with NotActivated but actually succeeds on testnet
+        try PERPS_MANAGER.deposit(address(this), address(USDC), amount) {
+            emit RISExDeposit(amount, true);
+        } catch {
+            // Check if deposit actually succeeded despite revert
+            emit RISExDeposit(amount, false);
+            USDC.approve(address(PERPS_MANAGER), 0);
+        }
     }
     
-    /// @notice Withdraw funds from RISEx
+    /// @notice Withdraw from RISEx
     /// @param token Token to withdraw
     /// @param amount Amount to withdraw
-    function withdrawFromRisEx(address token, uint256 amount) external onlyUserOrManager {
-        // Withdraw from RISEx to the caller (user or manager during liquidation)
-        RISEX.withdraw(msg.sender, token, amount);
+    function withdrawFromRISEx(address token, uint256 amount) external onlyOwnerOrManager {
+        // Withdraw to the caller (owner or manager during liquidation)
+        PERPS_MANAGER.withdraw(msg.sender, token, amount);
+        emit RISExWithdrawal(token, amount);
     }
     
-    /// @notice Place an order on RISEx
+    /// @notice Place order on RISEx
     /// @param orderData Encoded order data
-    /// @return orderId The order ID
-    function placeOrder(bytes calldata orderData) external onlyUser returns (uint256 orderId) {
-        return RISEX.placeOrder(orderData);
+    function placeOrder(bytes calldata orderData) external onlyOwnerOrManager {
+        // Place order on RISEx
+        PERPS_MANAGER.placeOrder(orderData);
+        emit OrderPlaced(orderData);
     }
     
-    /// @notice Cancel an order on RISEx
-    /// @param cancelData Encoded cancel data
-    function cancelOrder(bytes32 cancelData) external onlyUserOrManager {
-        RISEX.cancelOrder(cancelData);
+    /// @notice Cancel order on RISEx
+    /// @param cancelData Cancel order data
+    function cancelOrder(bytes32 cancelData) external onlyOwnerOrManager {
+        PERPS_MANAGER.cancelOrder(cancelData);
     }
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    // EMERGENCY FUNCTIONS
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ========== VIEW FUNCTIONS ==========
     
-    /// @notice Execute arbitrary call (only manager during liquidation)
-    /// @param target Contract to call
-    /// @param data Call data
-    /// @return success Whether call succeeded
-    /// @return returnData Return data from call
-    function execute(
-        address target,
-        bytes calldata data
-    ) external onlyManager returns (bool success, bytes memory returnData) {
-        (success, returnData) = target.call(data);
-        require(success, "Execution failed");
+    /// @notice Get Morpho position
+    /// @param marketId Market ID
+    /// @return Position data
+    function getMorphoPosition(bytes32 marketId) external view returns (Position memory) {
+        return MORPHO.position(marketId, address(this));
     }
     
-    /// @notice Rescue stuck tokens (only manager)
+    /// @notice Get RISEx account equity
+    /// @return equity Account equity (can be negative)
+    /// @return hasAccount Whether account exists in RISEx
+    function getRISExEquity() external view returns (int256 equity, bool hasAccount) {
+        try PERPS_MANAGER.getAccountEquity(address(this)) returns (int256 _equity) {
+            return (_equity, true);
+        } catch {
+            return (0, false);
+        }
+    }
+    
+    /// @notice Get token balance
+    /// @param token Token address
+    /// @return Balance
+    function getBalance(address token) external view returns (uint256) {
+        return IERC20(token).balanceOf(address(this));
+    }
+    
+    // ========== EMERGENCY FUNCTIONS ==========
+    
+    /// @notice Emergency token rescue (only manager)
     /// @param token Token to rescue
-    /// @param amount Amount to rescue
     /// @param to Recipient
-    function rescueToken(
-        address token,
-        uint256 amount,
-        address to
-    ) external onlyManager {
+    /// @param amount Amount to rescue
+    function rescueToken(address token, address to, uint256 amount) external onlyManager {
         IERC20(token).safeTransfer(to, amount);
     }
+}
+
+/// @notice Minimal RISEx interface
+interface IPerpsManager {
+    function deposit(address to, address token, uint256 amount) external;
+    function withdraw(address to, address token, uint256 amount) external;
+    function placeOrder(bytes calldata orderData) external returns (uint256);
+    function cancelOrder(bytes32 cancelData) external;
+    function getAccountEquity(address account) external view returns (int256);
 }

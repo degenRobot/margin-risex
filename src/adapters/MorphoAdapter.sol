@@ -64,13 +64,14 @@ contract MorphoAdapter {
             uint256 price = IOracle(marketParams.oracle).price();
             // Price is in 36 decimals, adjust for token decimals
             if (marketParams.collateralToken == Constants.WETH) {
-                // WETH: 18 decimals, USDC: 6 decimals
-                // collateral * price / 1e36 / 1e18 * 1e6 = collateral * price / 1e48 * 1e6
-                collateralValue = (position.collateral * price) / 1e30;
+                // Price oracle returns value such that: collateral * price / 1e36 = value in loan token
+                // For WETH collateral with USDC loan token, this gives us USDC value directly
+                collateralValue = (position.collateral * price) / 1e36;
             } else if (marketParams.collateralToken == Constants.WBTC) {
-                // WBTC: 8 decimals, USDC: 6 decimals  
-                // collateral * price / 1e36 / 1e8 * 1e6 = collateral * price / 1e38
-                collateralValue = (position.collateral * price) / 1e38;
+                // WBTC has 8 decimals, so we need to adjust:
+                // collateral * price / 1e36 would give us value assuming 18 decimals
+                // So we multiply by 1e10 to adjust: collateral * price / 1e36 * 1e10 = collateral * price / 1e26
+                collateralValue = (position.collateral * price) / 1e26;
             }
         }
         
@@ -94,9 +95,14 @@ contract MorphoAdapter {
         // Calculate collateral value in USDC
         uint256 collateralValue;
         if (marketParams.collateralToken == Constants.WETH) {
-            collateralValue = (collateralAmount * price) / 1e30;
+            // Price oracle returns value such that: collateral * price / 1e36 = value in loan token
+            // For WETH collateral with USDC loan token, this gives us USDC value directly
+            collateralValue = (collateralAmount * price) / 1e36;
         } else if (marketParams.collateralToken == Constants.WBTC) {
-            collateralValue = (collateralAmount * price) / 1e38;
+            // WBTC has 8 decimals, so we need to adjust:
+            // collateral * price / 1e36 would give us value assuming 18 decimals
+            // So we multiply by 1e10 to adjust: collateral * price / 1e36 * 1e10 = collateral * price / 1e26
+            collateralValue = (collateralAmount * price) / 1e26;
         }
         
         // Apply LLTV
