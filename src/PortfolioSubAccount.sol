@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMorpho, MarketParams, Position} from "./interfaces/IMorpho.sol";
 import {MarketParamsLib} from "./libraries/morpho/MarketParamsLib.sol";
 import {IRISExPerpsManager} from "./interfaces/IRISExPerpsManager.sol";
+import {IDeposit} from "./interfaces/IDeposit.sol";
 
 /// @title PortfolioSubAccount
 /// @notice User-specific proxy account for portfolio margin trading
@@ -22,6 +23,12 @@ contract PortfolioSubAccount {
     
     /// @notice RISEx Perps Manager contract  
     IRISExPerpsManager public immutable RISEX;
+    
+    /// @notice RISEx Deposit contract for USDC deposits
+    address constant DEPOSIT_CONTRACT = 0x5BC20A936EfEE0d758A3c168d2f017c83805B986;
+    
+    /// @notice USDC token address on RISE testnet
+    address constant USDC = 0x8d17fC7Db6b4FCf40AFB296354883DEC95a12f58;
     
     /// @notice The user who owns this sub-account
     address public user;
@@ -124,12 +131,15 @@ contract PortfolioSubAccount {
     /// @notice Borrow USDC from a Morpho market
     /// @param marketParams Market parameters
     /// @param amount Amount of USDC to borrow
+    /// @param toUser If true, send borrowed USDC to user; if false, keep in sub-account
     function borrowUSDC(
         MarketParams calldata marketParams,
-        uint256 amount
+        uint256 amount,
+        bool toUser
     ) external onlyUser {
-        // Borrow USDC from Morpho to user
-        (uint256 borrowed,) = MORPHO.borrow(marketParams, amount, 0, address(this), msg.sender);
+        // Borrow USDC from Morpho
+        address recipient = toUser ? msg.sender : address(this);
+        (uint256 borrowed,) = MORPHO.borrow(marketParams, amount, 0, address(this), recipient);
         
         emit USDCBorrowed(marketParams.id(), borrowed);
     }
@@ -168,18 +178,21 @@ contract PortfolioSubAccount {
     // RISEX INTEGRATION
     // ═══════════════════════════════════════════════════════════════════════════
     
-    /// @notice Deposit funds to RISEx
-    /// @param token Token to deposit
-    /// @param amount Amount to deposit
-    function depositToRisEx(address token, uint256 amount) external onlyUser {
-        // Transfer tokens from user
-        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+    /// @notice Deposit USDC to RISEx using the Deposit contract
+    /// @param amount Amount of USDC to deposit (in 6 decimals)
+    /// @dev Uses the separate Deposit contract which handles scaling and forwarding to PerpsManager
+    function depositToRisEx(uint256 amount) external onlyUser {
+        // Ensure we have sufficient USDC balance in the sub-account
+        require(IERC20(USDC).balanceOf(address(this)) >= amount, "Insufficient USDC balance");
         
-        // Approve RISEx
-        IERC20(token).safeApprove(address(RISEX), amount);
+        // Scale amount from 6 to 18 decimals (RISEx expects 18 decimals)
+        uint256 scaledAmount = amount * 10**12;
         
-        // Deposit to RISEx
-        RISEX.deposit(address(this), token, amount);
+        // Approve deposit contract to spend USDC
+        IERC20(USDC).safeApprove(DEPOSIT_CONTRACT, amount);
+        
+        // Deposit to RISEx via deposit contract
+        IDeposit(DEPOSIT_CONTRACT).deposit(address(this), scaledAmount);
     }
     
     /// @notice Withdraw funds from RISEx

@@ -6,8 +6,9 @@ import "forge-std/console2.sol";
 
 import {PortfolioMarginManager} from "../../src/PortfolioMarginManager.sol";
 import {PortfolioSubAccount} from "../../src/PortfolioSubAccount.sol";
-import {IMorpho, MarketParams, Id, Position, Market} from "morpho-blue/interfaces/IMorpho.sol";
-import {IOracle} from "morpho-blue/interfaces/IOracle.sol";
+import {IMorpho, MarketParams, Position, Market} from "../../src/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "../../src/libraries/morpho/MarketParamsLib.sol";
+import {IOracle} from "../../src/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IRISExPerpsManager} from "../../src/interfaces/IRISExPerpsManager.sol";
 
@@ -19,8 +20,8 @@ contract EnhancedSetup is Test {
     uint256 forkId;
     bool isForked;
     
-    // Deployed contracts from testnet
-    PortfolioMarginManager public manager = PortfolioMarginManager(0xB13Ec61327b78A024b344409D31f3e3F25eC2499);
+    // Core contracts (will be deployed fresh in tests)
+    PortfolioMarginManager public manager;
     IMorpho public morpho = IMorpho(0x70374FB7a93fD277E66C525B93f810A7D61d5606);
     IERC20 public usdc = IERC20(0x8d17fC7Db6b4FCf40AFB296354883DEC95a12f58);
     IERC20 public weth = IERC20(0x2B810002D2d6393E8E6B321a6B8cCF2F2E7726e1);
@@ -79,6 +80,10 @@ contract EnhancedSetup is Test {
             console2.log("Running on local network");
         }
         
+        // Deploy fresh PortfolioMarginManager with correct RISEx address
+        address risexPerpsManager = 0x68cAcD54a8c93A3186BF50bE6b78B761F728E1b4;
+        manager = new PortfolioMarginManager(address(morpho), risexPerpsManager);
+        
         // Setup market parameters
         wethMarket = MarketParams({
             loanToken: address(usdc),
@@ -95,6 +100,10 @@ contract EnhancedSetup is Test {
             irm: IRM,
             lltv: 0.77e18
         });
+        
+        // Configure markets in the manager
+        manager.addMarket(wethMarket, 0.85e18); // 85% collateral factor
+        manager.addMarket(wbtcMarket, 0.85e18); // 85% collateral factor
         
         // Setup test balances
         _setupTestBalances();
@@ -225,7 +234,7 @@ contract EnhancedSetup is Test {
         require(subAccount != address(0), "No sub-account");
         
         vm.prank(user);
-        PortfolioSubAccount(subAccount).borrowUSDC(market, amount);
+        PortfolioSubAccount(subAccount).borrowUSDC(market, amount, true); // Send to user by default
         
         console2.log(user, "borrowed", amount / 1e6, "USDC");
     }
@@ -235,7 +244,7 @@ contract EnhancedSetup is Test {
         require(subAccount != address(0), "No sub-account");
         
         vm.prank(user);
-        PortfolioSubAccount(subAccount).depositToRisEx(address(usdc), amount);
+        PortfolioSubAccount(subAccount).depositToRisEx(amount);
         
         console2.log(user, "deposited", amount / 1e6, "USDC to RISEx");
     }
@@ -285,9 +294,9 @@ contract EnhancedSetup is Test {
     }
     
     function getMorphoPosition(address subAccount, MarketParams memory market) public view returns (Position memory) {
-        // Calculate market ID the same way Morpho does
-        bytes32 marketId = keccak256(abi.encode(market));
-        return morpho.position(Id.wrap(marketId), subAccount);
+        // Use the MarketParamsLib to calculate market ID
+        bytes32 marketId = MarketParamsLib.id(market);
+        return morpho.position(marketId, subAccount);
     }
     
     // Note: These functions would work if RISEx interface was properly defined

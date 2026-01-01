@@ -4,7 +4,7 @@ pragma solidity ^0.8.19;
 import {EnhancedSetup} from "./utils/EnhancedSetup.sol";
 import {PortfolioSubAccount} from "../src/PortfolioSubAccount.sol";
 import {PortfolioMarginManager} from "../src/PortfolioMarginManager.sol";
-import {Position, Id} from "morpho-blue/interfaces/IMorpho.sol";
+import {MarketParams, Position, Market} from "../src/interfaces/IMorpho.sol";
 import {console2} from "forge-std/console2.sol";
 
 /// @title Liquidation Scenarios Test

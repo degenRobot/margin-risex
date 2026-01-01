@@ -1,12 +1,18 @@
 -include .env
 
-# Default RPC URL for RISE testnet
+# Default RPC URLs for RISE testnet
 RISE_TESTNET_RPC := https://testnet.riselabs.xyz
 
-# Use environment variable if set, otherwise use default
-FORK_URL := ${RPC_URL}
+# Use environment variable if set, otherwise use indexing RPC for forking
+FORK_URL := ${BACKEND_RPC_URL}
 ifeq ($(FORK_URL),)
-	FORK_URL := $(RISE_TESTNET_RPC)
+	FORK_URL := $(RISE_INDEXING_RPC)
+endif
+
+# Use regular RPC for deployments
+DEPLOY_RPC := ${RPC_URL}
+ifeq ($(DEPLOY_RPC),)
+	DEPLOY_RPC := $(RISE_TESTNET_RPC)
 endif
 
 # deps
@@ -18,9 +24,9 @@ size:; forge build --sizes
 inspect:; forge inspect ${contract} storageLayout
 
 # deployment
-deploy:; forge script script/03_DeployPortfolioMargin.s.sol --rpc-url ${FORK_URL} --broadcast --verify
-deploy-mocks:; forge script script/01_DeployMocks.s.sol --rpc-url ${FORK_URL} --broadcast --verify
-deploy-update-risex:; forge script script/06_UpdatePortfolioMarginWithRISEx.s.sol --rpc-url ${FORK_URL} --broadcast --private-key ${PRIVATE_KEY}
+deploy:; forge script script/03_DeployPortfolioMargin.s.sol --rpc-url ${DEPLOY_RPC} --broadcast --verify
+deploy-mocks:; forge script script/01_DeployMocks.s.sol --rpc-url ${DEPLOY_RPC} --broadcast --verify
+deploy-update-risex:; forge script script/06_UpdatePortfolioMarginWithRISEx.s.sol --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY}
 
 # demo scripts
 demo:; forge script script/05_SimpleDemoUserFlow.s.sol --rpc-url ${FORK_URL} -vvv
@@ -28,6 +34,17 @@ demo-broadcast:; BROADCAST=true forge script script/05_SimpleDemoUserFlow.s.sol 
 
 # mint USDC to test account
 mint-usdc:; forge script script/MintUSDC.s.sol:MintUSDCScript --rpc-url ${FORK_URL} --broadcast --private-key ${PRIVATE_KEY}
+
+# whitelist sub-account on RISEx
+whitelist:; SUB_ACCOUNT=${account} forge script script/07_WhitelistSubAccount.s.sol:WhitelistSubAccountScript --rpc-url ${FORK_URL} --broadcast --private-key ${PRIVATE_KEY}
+
+# test RISEx deposit via script
+test-risex-deposit:; forge script script/TestRISExDeposit.s.sol:TestRISExDepositScript --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY} -vvv
+test-risex-simple:; forge script script/TestRISExDepositSimple.s.sol:TestRISExDepositSimpleScript --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY} -vvv
+test-subaccount-risex:; forge script script/TestSubAccountRISEx.s.sol:TestSubAccountRISExScript --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY} -vvv
+test-risex-workaround:; forge script script/RISExWorkaround.s.sol:RISExWorkaroundScript --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY} -vvv
+test-morpho:; forge script script/TestMorphoIntegration.s.sol:TestMorphoIntegrationScript --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY} -vvv
+test-risex-fixed:; forge script script/TestRISExFixed.s.sol:TestRISExFixedScript --rpc-url ${DEPLOY_RPC} --broadcast --private-key ${PRIVATE_KEY} -vvv
 
 # local tests without fork
 test-local:; forge test -vv
@@ -50,7 +67,7 @@ trace-test:; forge test -vvvv --match-test $(test) --fork-url ${FORK_URL}
 test-basic:; forge test -vv --match-contract "PortfolioMarginBasicTest" --fork-url ${FORK_URL}
 test-risex:; forge test -vv --match-contract "PortfolioMarginRISExTest" --fork-url ${FORK_URL}
 test-liquidation:; forge test -vv --match-contract "PortfolioMarginLiquidation*Test" --fork-url ${FORK_URL}
-test-morpho:; forge test -vv --match-contract "PortfolioMarginMorphoTest" --fork-url ${FORK_URL}
+test-morpho-fork:; forge test -vv --match-contract "PortfolioMarginMorphoTest" --fork-url ${FORK_URL}
 test-fullops:; forge test -vv --match-contract "PortfolioMarginFullOpsTest" --fork-url ${FORK_URL}
 test-markets:; forge test -vv --match-contract "PortfolioMarginMarketsTest" --fork-url ${FORK_URL}
 
@@ -116,6 +133,7 @@ help:
 	@echo "  make deploy         - Deploy contracts to RISE testnet"
 	@echo "  make deploy-update-risex - Deploy updated manager with correct RISEx"
 	@echo "  make mint-usdc      - Mint USDC to test account"
+	@echo "  make whitelist account=<address> - Whitelist sub-account on RISEx"
 	@echo "  make demo           - Run demo script (dry-run)"
 	@echo "  make demo-broadcast - Run demo script (execute)"
 	@echo ""

@@ -26,3 +26,5 @@ deployments/*.json
 
 # OS
 .DS_Store
+
+NOTES/*

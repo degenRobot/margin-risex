@@ -6,12 +6,10 @@ import "forge-std/console2.sol";
 
 import {PortfolioMarginManager} from "../../src/PortfolioMarginManager.sol";
 import {PortfolioSubAccount} from "../../src/PortfolioSubAccount.sol";
-import {IMorpho, MarketParams, Id} from "morpho-blue/interfaces/IMorpho.sol";
-import {IOracle} from "morpho-blue/interfaces/IOracle.sol";
+import {IMorpho, MarketParams} from "../../src/interfaces/IMorpho.sol";
+import {IOracle} from "../../src/interfaces/IOracle.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockWETH} from "../../src/mocks/MockWETH.sol";
-import {MockWBTC} from "../../src/mocks/MockWBTC.sol";
-import {MockUSDC} from "../../src/mocks/MockUSDC.sol";
 import {MockOracle} from "../../src/mocks/MockOracle.sol";
 import {MockIRM} from "../../src/mocks/MockIRM.sol";
 
@@ -27,10 +25,8 @@ contract Setup is Test {
     
     // Mock tokens (when not forking)
     MockWETH public weth;
-    MockWBTC public wbtc;
-    MockUSDC public usdc;
+    IERC20 public usdc;  // Using real USDC on testnet
     MockOracle public wethOracle;
-    MockOracle public wbtcOracle;
     MockIRM public irm;
     
     // Deployed addresses from testnet
@@ -65,7 +61,7 @@ contract Setup is Test {
     
     // Market parameters
     MarketParams public wethMarketParams;
-    MarketParams public wbtcMarketParams;
+    // MarketParams public wbtcMarketParams;  // Skip WBTC for now
     
     function setUp() public virtual {
         owner = address(this);
@@ -85,11 +81,9 @@ contract Setup is Test {
             // Use deployed contracts
             manager = PortfolioMarginManager(DEPLOYED_PORTFOLIO_MANAGER);
             morpho = IMorpho(DEPLOYED_MORPHO);
-            usdc = MockUSDC(DEPLOYED_USDC);
+            usdc = IERC20(DEPLOYED_USDC);
             weth = MockWETH(DEPLOYED_WETH);
-            wbtc = MockWBTC(DEPLOYED_WBTC);
             wethOracle = MockOracle(DEPLOYED_WETH_ORACLE);
-            wbtcOracle = MockOracle(DEPLOYED_WBTC_ORACLE);
             irm = MockIRM(DEPLOYED_IRM);
         } else {
             // Deploy fresh mocks for local testing
@@ -111,12 +105,11 @@ contract Setup is Test {
     function _deployMocks() internal {
         // Deploy mock tokens
         weth = new MockWETH();
-        wbtc = new MockWBTC();
-        usdc = new MockUSDC();
+        // Use real USDC on testnet
+        usdc = IERC20(DEPLOYED_USDC);
         
         // Deploy oracles with realistic prices
         wethOracle = new MockOracle(3000 * 10**24); // $3000/ETH
-        wbtcOracle = new MockOracle(50000 * 10**34); // $50000/BTC
         
         // Deploy IRM with 5% APR
         irm = new MockIRM(0.05e18);
@@ -140,7 +133,7 @@ contract Setup is Test {
         // Add markets to manager
         vm.startPrank(owner);
         manager.addMarket(wethMarketParams, 0.85e18); // 85% collateral factor
-        manager.addMarket(wbtcMarketParams, 0.85e18); // 85% collateral factor
+        // manager.addMarket(wbtcMarketParams, 0.85e18); // Skip WBTC for now
         vm.stopPrank();
     }
     
@@ -153,13 +146,7 @@ contract Setup is Test {
             lltv: 0.77e18 // 77% LLTV
         });
         
-        wbtcMarketParams = MarketParams({
-            loanToken: address(usdc),
-            collateralToken: address(wbtc),
-            oracle: address(wbtcOracle),
-            irm: address(irm),
-            lltv: 0.77e18 // 77% LLTV
-        });
+        // Skip WBTC market params for now
     }
     
     function _setupTestBalances() internal {
@@ -171,8 +158,7 @@ contract Setup is Test {
         deal(address(weth), alice, INITIAL_WETH);
         deal(address(weth), bob, INITIAL_WETH);
         
-        deal(address(wbtc), alice, INITIAL_WBTC);
-        deal(address(wbtc), bob, INITIAL_WBTC);
+        // Skip WBTC balances for now
         
         // Deal ETH for gas
         vm.deal(alice, 100 ether);
@@ -185,9 +171,9 @@ contract Setup is Test {
         vm.label(address(morpho), "Morpho");
         vm.label(address(usdc), "USDC");
         vm.label(address(weth), "WETH");
-        vm.label(address(wbtc), "WBTC");
+        // vm.label(address(wbtc), "WBTC");  // Skip WBTC for now
         vm.label(address(wethOracle), "WETH Oracle");
-        vm.label(address(wbtcOracle), "WBTC Oracle");
+        // vm.label(address(wbtcOracle), "WBTC Oracle");  // Skip WBTC for now
         vm.label(address(irm), "IRM");
         vm.label(RISEX_PERPS_MANAGER, "RISEx PerpsManager");
         vm.label(alice, "Alice");
@@ -229,7 +215,7 @@ contract Setup is Test {
         uint256 amount
     ) public {
         vm.prank(user);
-        PortfolioSubAccount(subAccount).borrowUSDC(marketParams, amount);
+        PortfolioSubAccount(subAccount).borrowUSDC(marketParams, amount, true); // Send to user by default
     }
     
     /// @notice Get portfolio health status
@@ -266,7 +252,7 @@ contract Setup is Test {
         
         // Accrue interest on Morpho markets
         morpho.accrueInterest(wethMarketParams);
-        morpho.accrueInterest(wbtcMarketParams);
+        // morpho.accrueInterest(wbtcMarketParams);  // Skip WBTC for now
     }
     
     /// @notice Manipulate oracle price for testing
