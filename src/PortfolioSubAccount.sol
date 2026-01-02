@@ -3,9 +3,14 @@ pragma solidity ^0.8.30;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IMorpho, MarketParams, Position} from "./interfaces/IMorpho.sol";
+import {IMorpho, MarketParams, Position, Market} from "./interfaces/IMorpho.sol";
 import {MarketParamsLib} from "./libraries/morpho/MarketParamsLib.sol";
 import {Constants} from "./libraries/Constants.sol";
+
+/// @notice Minimal interface for Morpho price oracles
+interface IMorphoOracle {
+    function price() external view returns (uint256);
+}
 
 /// @title PortfolioSubAccount
 /// @notice User sub-account for portfolio margin trading with Morpho and RISEx
@@ -199,6 +204,183 @@ contract PortfolioSubAccount {
     /// @param cancelData Cancel order data
     function cancelOrder(bytes32 cancelData) external onlyOwnerOrManager {
         PERPS_MANAGER.cancelOrder(cancelData);
+    }
+    
+    // ========== COMBINED OPERATIONS ==========
+    
+    /// @notice Lend collateral and open position in one transaction
+    /// @param marketParams Morpho market parameters
+    /// @param collateralAmount Amount of collateral to supply
+    /// @param borrowAmount Amount of USDC to borrow
+    /// @param orderData Encoded order data for RISEx position
+    function openPositionWithCollateral(
+        MarketParams calldata marketParams,
+        uint256 collateralAmount,
+        uint256 borrowAmount,
+        bytes calldata orderData
+    ) external onlyOwner {
+        // 1. Supply collateral to Morpho
+        IERC20(marketParams.collateralToken).safeTransferFrom(msg.sender, address(this), collateralAmount);
+        IERC20(marketParams.collateralToken).safeApprove(address(MORPHO), collateralAmount);
+        MORPHO.supplyCollateral(marketParams, collateralAmount, address(this), "");
+        emit CollateralSupplied(marketParams.id(), collateralAmount);
+        
+        // 2. Borrow USDC from Morpho
+        require(marketParams.loanToken == address(USDC), "Can only borrow USDC");
+        (uint256 borrowed,) = MORPHO.borrow(
+            marketParams,
+            borrowAmount,
+            0,
+            address(this),
+            address(this)
+        );
+        emit USDCBorrowed(marketParams.id(), borrowed);
+        
+        // 3. Deposit USDC to RISEx (up to borrowed amount)
+        uint256 depositAmount = borrowed > borrowAmount ? borrowAmount : borrowed;
+        if (depositAmount > 0) {
+            USDC.approve(address(PERPS_MANAGER), depositAmount);
+            try PERPS_MANAGER.deposit(address(this), address(USDC), depositAmount) {
+                emit RISExDeposit(depositAmount, true);
+            } catch {
+                emit RISExDeposit(depositAmount, false);
+                USDC.approve(address(PERPS_MANAGER), 0);
+            }
+        }
+        
+        // 4. Place order on RISEx
+        PERPS_MANAGER.placeOrder(orderData);
+        emit OrderPlaced(orderData);
+    }
+    
+    /// @notice Close position and withdraw funds in one transaction
+    /// @param marketParams Morpho market parameters
+    /// @param closeOrderData Order data to close RISEx position
+    /// @param withdrawAmount Amount to withdraw from RISEx
+    /// @param repayAll Whether to repay all Morpho debt
+    function closePositionAndWithdraw(
+        MarketParams calldata marketParams,
+        bytes calldata closeOrderData,
+        uint256 withdrawAmount,
+        bool repayAll
+    ) external onlyOwner {
+        // 1. Close position on RISEx
+        PERPS_MANAGER.placeOrder(closeOrderData);
+        emit OrderPlaced(closeOrderData);
+        
+        // 2. Withdraw USDC from RISEx to this account
+        if (withdrawAmount > 0) {
+            PERPS_MANAGER.withdraw(address(this), address(USDC), withdrawAmount);
+            emit RISExWithdrawal(address(USDC), withdrawAmount);
+        }
+        
+        // 3. Repay Morpho debt
+        Position memory pos = MORPHO.position(marketParams.id(), address(this));
+        if (pos.borrowShares > 0) {
+            uint256 repayAmount = repayAll ? type(uint256).max : USDC.balanceOf(address(this));
+            if (repayAmount > 0) {
+                USDC.safeApprove(address(MORPHO), repayAmount);
+                (uint256 repaid,) = MORPHO.repay(marketParams, repayAmount, 0, address(this), "");
+                emit USDCRepaid(marketParams.id(), repaid);
+            }
+        }
+        
+        // 4. If all debt repaid, withdraw collateral to owner
+        pos = MORPHO.position(marketParams.id(), address(this));
+        if (pos.borrowShares == 0 && pos.collateral > 0) {
+            MORPHO.withdrawCollateral(marketParams, pos.collateral, address(this), owner);
+            emit CollateralWithdrawn(marketParams.id(), pos.collateral);
+        }
+    }
+    
+    /// @notice Rebalance position based on Morpho LTV
+    /// @param marketParams Morpho market parameters
+    /// @param orderData Order data for RISEx adjustment
+    /// @param targetLTV Target loan-to-value ratio (in basis points, e.g., 5000 = 50%)
+    function rebalancePosition(
+        MarketParams calldata marketParams,
+        bytes calldata orderData,
+        uint256 targetLTV
+    ) external onlyOwner {
+        // Get current Morpho position
+        Position memory pos = MORPHO.position(marketParams.id(), address(this));
+        require(pos.collateral > 0, "No collateral");
+        
+        // Calculate current and target values
+        uint256 collateralValue = _getCollateralValue(marketParams, pos.collateral);
+        uint256 currentDebt = _getDebtValue(marketParams, pos.borrowShares);
+        uint256 targetDebt = (collateralValue * targetLTV) / 10000;
+        
+        if (targetDebt > currentDebt) {
+            // Need to increase position: borrow more and deposit to RISEx
+            uint256 borrowAmount = targetDebt - currentDebt;
+            
+            // Borrow additional USDC
+            (uint256 borrowed,) = MORPHO.borrow(
+                marketParams,
+                borrowAmount,
+                0,
+                address(this),
+                address(this)
+            );
+            emit USDCBorrowed(marketParams.id(), borrowed);
+            
+            // Deposit to RISEx
+            if (borrowed > 0) {
+                USDC.approve(address(PERPS_MANAGER), borrowed);
+                try PERPS_MANAGER.deposit(address(this), address(USDC), borrowed) {
+                    emit RISExDeposit(borrowed, true);
+                } catch {
+                    emit RISExDeposit(borrowed, false);
+                    USDC.approve(address(PERPS_MANAGER), 0);
+                }
+            }
+            
+            // Place order to increase position
+            PERPS_MANAGER.placeOrder(orderData);
+            emit OrderPlaced(orderData);
+            
+        } else if (targetDebt < currentDebt) {
+            // Need to decrease position: close some position and repay debt
+            uint256 repayAmount = currentDebt - targetDebt;
+            
+            // Place order to reduce position
+            PERPS_MANAGER.placeOrder(orderData);
+            emit OrderPlaced(orderData);
+            
+            // Withdraw USDC from RISEx
+            PERPS_MANAGER.withdraw(address(this), address(USDC), repayAmount);
+            emit RISExWithdrawal(address(USDC), repayAmount);
+            
+            // Repay debt to Morpho
+            uint256 availableUSDC = USDC.balanceOf(address(this));
+            uint256 actualRepay = availableUSDC > repayAmount ? repayAmount : availableUSDC;
+            if (actualRepay > 0) {
+                USDC.safeApprove(address(MORPHO), actualRepay);
+                (uint256 repaid,) = MORPHO.repay(marketParams, actualRepay, 0, address(this), "");
+                emit USDCRepaid(marketParams.id(), repaid);
+            }
+        }
+    }
+    
+    /// @notice Helper to get collateral value in USDC
+    function _getCollateralValue(MarketParams memory marketParams, uint256 collateralAmount) internal view returns (uint256) {
+        uint256 price = IMorphoOracle(marketParams.oracle).price();
+        // Price conversion depends on collateral decimals
+        if (marketParams.collateralToken == Constants.WETH) {
+            return (collateralAmount * price) / 1e36; // WETH: 18 decimals
+        } else if (marketParams.collateralToken == Constants.WBTC) {
+            return (collateralAmount * price) / 1e26; // WBTC: 8 decimals
+        }
+        revert("Unsupported collateral");
+    }
+    
+    /// @notice Helper to get debt value from shares
+    function _getDebtValue(MarketParams memory marketParams, uint256 borrowShares) internal view returns (uint256) {
+        if (borrowShares == 0) return 0;
+        Market memory marketData = MORPHO.market(marketParams.id());
+        if (marketData.totalBorrowShares == 0) return 0;
+        return (borrowShares * marketData.totalBorrowAssets) / marketData.totalBorrowShares;
     }
     
     // ========== VIEW FUNCTIONS ==========
